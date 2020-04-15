@@ -1,17 +1,14 @@
 import glob
 import math
 import os
-from argparse import Namespace
+from argparse import Namespace, ArgumentParser
 
 import pytest
 import torch
 
 import tests.base.utils as tutils
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import (
-    EarlyStopping,
-    ModelCheckpoint,
-)
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning import Callback
 from pytorch_lightning.core.lightning import load_hparams_from_tags_csv
 from pytorch_lightning.trainer.logging import TrainerLoggingMixin
@@ -34,7 +31,7 @@ def test_hparams_save_load(tmpdir):
 
     # logger file to get meta
     trainer_options = dict(
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         max_epochs=1,
     )
 
@@ -199,7 +196,7 @@ def test_gradient_accumulation_scheduling(tmpdir):
                       train_percent_check=0.1,
                       val_percent_check=0.1,
                       max_epochs=2,
-                      default_save_path=tmpdir)
+                      default_root_dir=tmpdir)
 
     # for the test
     trainer.optimizer_step = _optimizer_step
@@ -339,7 +336,7 @@ def test_resume_from_checkpoint_epoch_restored(tmpdir):
         val_percent_check=1,
         checkpoint_callback=ModelCheckpoint(tmpdir, save_top_k=-1),
         logger=False,
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         early_stop_callback=False,
         val_check_interval=1.,
     )
@@ -389,7 +386,7 @@ def test_trainer_max_steps_and_epochs(tmpdir):
 
     # define less train steps than epochs
     trainer_options.update(dict(
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         max_epochs=3,
         max_steps=num_train_samples + 10
     ))
@@ -424,7 +421,7 @@ def test_trainer_min_steps_and_epochs(tmpdir):
 
     # define callback for stopping the model and default epochs
     trainer_options.update(dict(
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         early_stop_callback=EarlyStopping(monitor='val_loss', min_delta=1.0),
         val_check_interval=2,
         min_epochs=1,
@@ -475,7 +472,7 @@ def test_benchmark_option(tmpdir):
 
     # logger file to get meta
     trainer_options = dict(
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         max_epochs=1,
         benchmark=True,
     )
@@ -594,8 +591,9 @@ def test_nan_loss_detection(tmpdir):
 
     # fit model
     trainer = Trainer(
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         max_steps=(test_step + 1),
+        terminate_on_nan=True
     )
 
     with pytest.raises(ValueError, match=r'.*The loss returned in `training_step` is nan or inf.*'):
@@ -620,8 +618,9 @@ def test_nan_params_detection(tmpdir):
 
     model = NanParamModel(hparams)
     trainer = Trainer(
-        default_save_path=tmpdir,
+        default_root_dir=tmpdir,
         max_steps=(test_step + 1),
+        terminate_on_nan=True
     )
 
     with pytest.raises(ValueError, match=r'.*Detected nan and/or inf values in `c_d1.bias`.*'):
@@ -654,10 +653,52 @@ def test_trainer_interrupted_flag(tmpdir):
         'train_percent_check': 0.2,
         'progress_bar_refresh_rate': 0,
         'logger': False,
-        'default_save_path': tmpdir,
+        'default_root_dir': tmpdir,
     }
 
     trainer = Trainer(**trainer_options)
     assert not trainer.interrupted
     trainer.fit(model)
     assert trainer.interrupted
+
+
+def test_gradient_clipping(tmpdir):
+    """
+    Test gradient clipping
+    """
+    tutils.reset_seed()
+
+    hparams = tutils.get_default_hparams()
+    model = LightningTestModel(hparams)
+
+    # test that gradient is clipped correctly
+    def _optimizer_step(*args, **kwargs):
+        parameters = model.parameters()
+        grad_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in parameters]), 2)
+        assert (grad_norm - 1.0).abs() < 0.01, "Gradient norm != 1.0: {grad_norm}".format(grad_norm=grad_norm)
+
+    trainer = Trainer(max_steps=1,
+                      max_epochs=1,
+                      gradient_clip_val=1.0,
+                      default_root_dir=tmpdir)
+
+    # for the test
+    model.optimizer_step = _optimizer_step
+    model.prev_called_batch_idx = 0
+
+    trainer.fit(model)
+
+
+def test_gpu_choice(tmpdir):
+    trainer_options = dict(
+        default_save_path=tmpdir,
+    )
+    # Only run if CUDA is available
+    if not torch.cuda.is_available():
+        return
+
+    num_gpus = torch.cuda.device_count()
+    Trainer(**trainer_options, gpus=num_gpus, auto_select_gpus=True)
+
+    with pytest.raises(RuntimeError, match=r'.*No GPUs available.*'):
+        Trainer(**trainer_options, gpus=num_gpus + 1, auto_select_gpus=True)

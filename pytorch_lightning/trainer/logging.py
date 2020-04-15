@@ -20,7 +20,7 @@ class TrainerLoggingMixin(ABC):
     proc_rank: int
     use_dp: bool
     use_ddp2: bool
-    default_save_path: str
+    default_root_dir: str
     slurm_job_id: int
     num_gpus: int
 
@@ -28,7 +28,7 @@ class TrainerLoggingMixin(ABC):
         if logger is True:
             # default logger
             self.logger = TensorBoardLogger(
-                save_dir=self.default_save_path,
+                save_dir=self.default_root_dir,
                 version=self.slurm_job_id,
                 name='lightning_logs'
             )
@@ -71,7 +71,7 @@ class TrainerLoggingMixin(ABC):
             step = step if step is not None else self.global_step
         # log actual metrics
         if self.proc_rank == 0 and self.logger is not None:
-            self.logger.log_metrics(scalar_metrics, step=step)
+            self.logger.agg_and_log_metrics(scalar_metrics, step=step)
             self.logger.save()
 
     def add_tqdm_metrics(self, metrics):
@@ -111,10 +111,6 @@ class TrainerLoggingMixin(ABC):
         if train and (self.use_dp or self.use_ddp2):
             num_gpus = self.num_gpus
             callback_metrics = self.reduce_distributed_output(callback_metrics, num_gpus)
-
-        for k, v in callback_metrics.items():
-            if isinstance(v, torch.Tensor):
-                callback_metrics[k] = v.item()
 
         # ---------------
         # EXTRACT PROGRESS BAR KEYS

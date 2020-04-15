@@ -1,5 +1,4 @@
 import os
-import warnings
 from argparse import Namespace
 
 import numpy as np
@@ -21,8 +20,21 @@ RANDOM_SEEDS = list(np.random.randint(0, 10000, 1000))
 ROOT_PATH = os.path.abspath(os.path.dirname(__file__))
 
 
+def assert_speed_parity(pl_times, pt_times, num_epochs):
+
+    # assert speeds
+    max_diff_per_epoch = 0.9
+    pl_times = np.asarray(pl_times)
+    pt_times = np.asarray(pt_times)
+    diffs = pl_times - pt_times
+    diffs = diffs / num_epochs
+
+    assert np.alltrue(diffs < max_diff_per_epoch), \
+        f"lightning was slower than PT (threshold {max_diff_per_epoch})"
+
+
 def run_model_test_no_loggers(trainer_options, model, min_acc=0.50):
-    # save_dir = trainer_options['default_save_path']
+    # save_dir = trainer_options['default_root_dir']
 
     # fit model
     trainer = Trainer(**trainer_options)
@@ -34,7 +46,7 @@ def run_model_test_no_loggers(trainer_options, model, min_acc=0.50):
     # test model loading
     pretrained_model = load_model(trainer.logger,
                                   trainer.checkpoint_callback.dirpath,
-                                  path_expt=trainer_options.get('default_save_path'))
+                                  path_expt=trainer_options.get('default_root_dir'))
 
     # test new model accuracy
     test_loaders = model.test_dataloader()
@@ -51,7 +63,7 @@ def run_model_test_no_loggers(trainer_options, model, min_acc=0.50):
 
 
 def run_model_test(trainer_options, model, on_gpu=True):
-    save_dir = trainer_options['default_save_path']
+    save_dir = trainer_options['default_root_dir']
 
     # logger file to get meta
     logger = get_default_testtube_logger(save_dir, False)
@@ -92,7 +104,7 @@ def run_model_test(trainer_options, model, on_gpu=True):
 
 
 def get_default_hparams(continue_training=False, hpc_exp_number=0):
-    tests_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    _ = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
     args = {
         'drop_prob': 0.2,

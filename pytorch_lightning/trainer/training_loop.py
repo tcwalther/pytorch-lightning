@@ -121,7 +121,8 @@ When this flag is enabled each batch is split into sequences of size truncated_b
 
 NaN detection and intervention
 ------------------------------
-In every forward pass in training, Lightning will check that
+When the `terminate_on_nan` flag is enabled, after every forward pass during training, Lightning will
+check that
 
 1. the loss you return in `training_step` is finite (not NaN and not +/-inf)
 2. the model parameters have finite values.
@@ -130,10 +131,17 @@ Lightning will terminate the training loop with an error message if NaN or infin
 values are detected. If this happens, you should investigate numerically unstable operations
 in your model.
 
+.. code-block:: python
+
+    # DEFAULT (won't perform the NaN check)
+    trainer = Trainer(terminate_on_nan=False)
+
+    # (NaN check each batch and terminate on NaN or infinite values)
+    trainer = Trainer(terminate_on_nan=True)
+
 """
 
 import copy
-import warnings
 from abc import ABC, abstractmethod
 from typing import Callable
 from typing import Union, List
@@ -147,7 +155,8 @@ from pytorch_lightning.core.lightning import LightningModule
 from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.overrides.data_parallel import LightningDistributedDataParallel, LightningDataParallel
 from pytorch_lightning.utilities.exceptions import MisconfigurationException
-from pytorch_lightning.trainer.supporters import TensorRunningMean
+from pytorch_lightning.trainer.supporters import TensorRunningAccum
+from pytorch_lightning.utilities import rank_zero_warn
 
 try:
     from apex import amp
@@ -216,6 +225,7 @@ class TrainerTrainLoopMixin(ABC):
     min_steps: int
     total_batch_idx: int
     checkpoint_callback: ...
+    terminate_on_nan: bool
 
     # Callback system
     callbacks: List[Callback]
@@ -284,8 +294,8 @@ class TrainerTrainLoopMixin(ABC):
         """Warning: this is just empty shell for code implemented in other class."""
 
     def train(self):
-        warnings.warn('Displayed epoch numbers in the progress bar start from "1" until v0.6.x,'
-                      ' but will start from "0" in v0.8.0.', RuntimeWarning)
+        rank_zero_warn('Displayed epoch numbers in the progress bar start from "1" until v0.6.x,'
+                       ' but will start from "0" in v0.8.0.', RuntimeWarning)
 
         # get model
         model = self.get_model()
@@ -337,7 +347,7 @@ class TrainerTrainLoopMixin(ABC):
                 self.accumulation_scheduler.on_epoch_start(self, self.get_model())
 
                 # stores accumulated grad fractions per batch
-                self.batch_loss_value = TensorRunningMean(
+                self.batch_loss_value = TensorRunningAccum(
                     window_length=self.accumulate_grad_batches
                 )
 
@@ -386,7 +396,8 @@ class TrainerTrainLoopMixin(ABC):
             self.run_training_teardown()
 
         except KeyboardInterrupt:
-            log.info('Detected KeyboardInterrupt, attempting graceful shutdown...')
+            if self.proc_rank == 0:
+                log.info('Detected KeyboardInterrupt, attempting graceful shutdown...')
             self.interrupted = True
             self.run_training_teardown()
 
@@ -531,7 +542,7 @@ class TrainerTrainLoopMixin(ABC):
         all_log_metrics = []
 
         if batch is None:
-            return 0, grad_norm_dic, {}
+            return 0, grad_norm_dic, {}, {}
 
         # Batch start events
         with self.profiler.profile('on_batch_start'):
@@ -541,7 +552,7 @@ class TrainerTrainLoopMixin(ABC):
             if self.is_function_implemented('on_batch_start'):
                 response = self.get_model().on_batch_start(batch)
                 if response == -1:
-                    return -1, grad_norm_dic, {}
+                    return -1, grad_norm_dic, {}, {}
 
         splits = [batch]
         if self.truncated_bptt_steps is not None:
@@ -603,7 +614,8 @@ class TrainerTrainLoopMixin(ABC):
                 loss, batch_output = optimizer_closure()
 
                 # check if loss or model weights are nan
-                self.detect_nan_tensors(loss)
+                if self.terminate_on_nan:
+                    self.detect_nan_tensors(loss)
 
                 # track total loss for logging (avoid mem leaks)
                 self.batch_loss_value.append(loss)
@@ -750,8 +762,8 @@ class TrainerTrainLoopMixin(ABC):
             with self.profiler.profile('training_end'):
                 output = model_ref.training_end(output)
 
-            warnings.warn('`training_end` was deprecated in 0.7.0 and will be removed 1.0.0.'
-                          ' Use training_epoch_end instead', DeprecationWarning)
+            rank_zero_warn('`training_end` was deprecated in 0.7.0 and will be removed 1.0.0.'
+                           ' Use training_epoch_end instead', DeprecationWarning)
 
         return output
 

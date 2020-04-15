@@ -58,7 +58,7 @@ So you can run it like so:distributed_backend
 
 .. code-block:: bash
 
-    $ python main.py --gpus 2
+    python main.py --gpus 2
 
 
 .. note::
@@ -134,6 +134,27 @@ Example::
 
     # default used by the Trainer
     trainer = Trainer(amp_level='O1')
+
+auto_lr_find
+^^^^^^^^^^^^
+Runs a learning rate finder algorithm (see this `paper <https://arxiv.org/abs/1506.01186>`_)
+before any training, to find optimal initial learning rate.
+
+.. code-block:: python
+
+    # default used by the Trainer (no learning rate finder)
+    trainer = Trainer(auto_lr_find=False)
+
+Example::
+
+    # run learning rate finder, results override hparams.learning_rate
+    trainer = Trainer(auto_lr_find=True)
+
+    # run learning rate finder, results override hparams.my_lr_arg
+    trainer = Trainer(auto_lr_find='my_lr_arg')
+
+.. note::
+    See the `learning rate finder guide <lr_finder.rst>`_
 
 benchmark
 ^^^^^^^^^
@@ -211,7 +232,7 @@ Example::
         prefix=''
     )
 
-default_save_path
+default_root_dir
 ^^^^^^^^^^^^^^^^^
 
 Default path for logs and weights when no logger
@@ -222,7 +243,7 @@ are stored. If you don't then use this method for convenience.
 Example::
 
     # default used by the Trainer
-    trainer = Trainer(default_save_path=os.getcwd())
+    trainer = Trainer(default_root_path=os.getcwd())
 
 distributed_backend
 ^^^^^^^^^^^^^^^^^^^
@@ -550,7 +571,7 @@ submit this script using the xla_dist script.
 
 Example::
 
-    $ python -m torch_xla.distributed.xla_dist
+    python -m torch_xla.distributed.xla_dist
     --tpu=$TPU_POD_NAME
     --conda-env=torch-xla-nightly
     --env=XLA_USE_BF16=1
